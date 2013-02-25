@@ -12,6 +12,8 @@ LOG_LINE_REGEX = r'([0-9\.]+)\s-\s-\s\[.*?\]\s"GET\s(.*?)\sHTTP.*?"\s[0-9]+\s[0-
 
 class LogParser(object):
 
+	QUEUE_SIZE_MAX = 1000
+
 	def __init__(self, log_queue, log_file, limit):
 		self.log_file = log_file
 		self.queue = log_queue
@@ -19,7 +21,6 @@ class LogParser(object):
 		self.log_regex = re.compile(LOG_LINE_REGEX)
 
 		self.limit = limit
-		self.queue_size_max = 1000 if limit > 1000 else limit
 
 		self.queued = 0
 
@@ -36,10 +37,10 @@ class LogParser(object):
 			return False
 
 		for line in lines:
-			if self.queued >= self.limit:
+			if self.limit > 0 and self.queued >= self.limit:
 				return False
 
-			while self.queue.qsize() > self.queue_size_max:
+			while self.queue.qsize() > self.QUEUE_SIZE_MAX:
 				time.sleep(0.1)
 
 			parsed_line = self._get_parsed_line(line)
@@ -55,7 +56,9 @@ class LogParser(object):
 		self.parser_job = Thread(target=self._parser_job)
 		self.parser_job.start()
 
-		while self.queue.qsize() < self.queue_size_max / 2:
+		wait_until = max(min(self.limit, self.QUEUE_SIZE_MAX / 2), 1)
+
+		while self.queue.qsize() < wait_until:
 			time.sleep(0.1)
 
 	def stop(self):
@@ -72,7 +75,7 @@ class RequestWorker(object):
 		self.limit = limit
 		self.workers = workers
 
-		self.print_on = int(limit / 10)
+		self.print_on = max(int(limit / 10), 1000)
 
 		self.results = {
 			'total': 0,
@@ -84,7 +87,7 @@ class RequestWorker(object):
 	def _print_progress(self):
 		if self.results['total'] % self.print_on == 0:
 			time_total = time.time() - self.t0
-			print 'done', self.results['total'], '/', self.limit, '|', int(round(self.results['ok'] / time_total)), 'per sec'
+			print 'done', self.results['total'], '/', self.limit if self.limit > 0 else '?', '|', int(round(self.results['ok'] / time_total)), 'per sec'
 
 	def _make_request(self):
 		try:
@@ -167,8 +170,8 @@ def parse_args():
 
 	parser.add_argument('-a', '--address', type=str, help='HTTP server address', required=True)
 	parser.add_argument('-f', '--file', type=str, help='Log file location', required=True)
-	parser.add_argument('-r', '--requests', type=int, help='Number of requests', required=True)
 	parser.add_argument('-c', '--concurrency', type=int, default=1, help='Number of concurrent requests')
+	parser.add_argument('-r', '--requests', type=int, default=-1, help='Number of requests')
 	parser.add_argument('-t', '--timeout', type=int, default=1, help='Request timeout in seconds')
 
 	return parser.parse_args(sys.argv[1:])
