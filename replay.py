@@ -19,11 +19,9 @@ class LogParser(object):
 	def __init__(self, log_queue, log_file, limit):
 		self.log_file = log_file
 		self.queue = log_queue
-
 		self.log_regex = re.compile(LOG_LINE_REGEX)
-
 		self.limit = limit
-
+		self.running = False
 		self.queued = 0
 
 	def _get_parsed_line(self, line):
@@ -53,29 +51,29 @@ class LogParser(object):
 
 	def _parser_job(self):
 		while self._parse_next_batch(): pass
+		self.running = False
 
 	def start(self):
+		self.running = True
+
 		self.parser_job = Thread(target=self._parser_job)
 		self.parser_job.start()
 
-		wait_until = max(min(self.limit, self.QUEUE_SIZE_MAX / 2), 1)
-
-		while self.queue.qsize() < wait_until:
-			time.sleep(0.1)
-
-	def stop(self):
+	def join(self):
 		self.parser_job.join()
 
 
 class RequestWorker(object):
-
-	def __init__(self, log_queue, address, timeout, limit, workers):
+	def __init__(self, log_file, address, timeout, limit, workers):
 		self.address = address
 		self.timeout = timeout
 
-		self.queue = log_queue
+		self.queue = Queue()
+
 		self.limit = limit
 		self.workers = workers
+
+		self.log_parser = LogParser(self.queue, log_file, limit)
 
 		self.print_on = max(int(limit / 10), 1000)
 
@@ -93,7 +91,7 @@ class RequestWorker(object):
 
 	def _make_request(self):
 		try:
-			ip, path, user_agent = self.queue.get(False)
+			ip, path, user_agent = self.queue.get(block=self.log_parser.running, timeout=1)
 		except Empty:
 			return False
 
@@ -122,6 +120,29 @@ class RequestWorker(object):
 		self._print_progress()
 
 		return True
+
+	def _start(self):
+		self.log_parser.start()
+
+		self.jobs = []
+		for i in xrange(self.workers):
+			co = Thread(target=self._log_consumer_job)
+			self.jobs.append(co)
+			co.start()
+
+		self.t0 = time.time()
+
+		self.log_parser.join()
+
+	def _join(self):
+		for co in self.jobs:
+			co.join()
+
+		self.time_total = time.time() - self.t0
+
+	def run(self):
+		self._start()
+		self._join()
 
 	def _log_consumer_job(self):
 		while self._make_request(): pass
@@ -152,20 +173,6 @@ class RequestWorker(object):
 			print '%d%%\t%sms' % (c * 100, get_ms(ts[int(tlen * c)]))
 		print '100%%\t%sms' % get_ms(ts[-1])
 
-	def start(self):
-		self.jobs = []
-		for i in xrange(self.workers):
-			co = Thread(target=self._log_consumer_job)
-			self.jobs.append(co)
-			co.start()
-
-		self.t0 = time.time()
-
-	def stop(self):
-		for co in self.jobs:
-			co.join()
-
-		self.time_total = time.time() - self.t0
 
 def parse_args():
 	parser = argparse.ArgumentParser(description='Replay HTTP Benchmark.')
@@ -179,21 +186,12 @@ def parse_args():
 	return parser.parse_args(sys.argv[1:])
 
 def run_benchmark(options):
-	log_queue = Queue()
-
 	log_file = open(options['file'], 'r')
 
-	log_parser = LogParser(log_queue, log_file, options['requests'])
-	request_worker = RequestWorker(log_queue, options['address'], options['timeout'],
+	request_worker = RequestWorker(log_file, options['address'], options['timeout'],
 			options['requests'], options['concurrency'])
 
-	log_parser.start()
-
-	request_worker.start()
-	request_worker.stop()
-
-	log_parser.stop()
-
+	request_worker.run()
 	request_worker.print_report()
 
 
