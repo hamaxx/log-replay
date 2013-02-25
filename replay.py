@@ -3,9 +3,10 @@
 import sys
 import time
 import re
-import urllib2
 import numpy
 import argparse
+import urllib2
+from socket import timeout
 
 from Queue import Queue, Empty
 from threading import Thread
@@ -57,10 +58,12 @@ class LogParser(object):
 		self.running = True
 
 		self.parser_job = Thread(target=self._parser_job)
+		self.parser_job.daemon=True
 		self.parser_job.start()
 
 	def join(self):
-		self.parser_job.join()
+		while self.parser_job.isAlive():
+			self.parser_job.join(1)
 
 
 class RequestWorker(object):
@@ -104,15 +107,15 @@ class RequestWorker(object):
 			response = urllib2.urlopen(request, timeout=self.timeout)
 
 			if response.getcode() >= 400:
-				raise Exception("Response code error %s" % response.getcode())
+				raise urllib2.URLError("Response code error %s" % response.getcode())
 
 			response.read()
 
 			self.times.append(time.time() - tr0)
 
 			self.results['ok'] += 1
-		except Exception, e:
-			print e
+		except (urllib2.URLError, timeout), e:
+			print '%s < %s' % (e, url)
 			self.results['error'] += 1
 
 		self.results['total'] += 1
@@ -127,6 +130,7 @@ class RequestWorker(object):
 		self.jobs = []
 		for i in xrange(self.workers):
 			co = Thread(target=self._log_consumer_job)
+			co.daemon=True
 			self.jobs.append(co)
 			co.start()
 
@@ -136,7 +140,8 @@ class RequestWorker(object):
 
 	def _join(self):
 		for co in self.jobs:
-			co.join()
+			while co.isAlive():
+				co.join(1)
 
 		self.time_total = time.time() - self.t0
 
