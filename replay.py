@@ -51,7 +51,10 @@ class LogParser(object):
 		return True
 
 	def _parser_job(self):
-		while self._parse_next_batch(): pass
+		try:
+			while self._parse_next_batch(): pass
+		except Exception, e:
+			print 'Log parser exception: %s' % e
 		self.running = False
 
 	def start(self):
@@ -150,7 +153,10 @@ class RequestWorker(object):
 		self._join()
 
 	def _log_consumer_job(self):
-		while self._make_request(): pass
+		try:
+			while self._make_request(): pass
+		except Exception, e:
+			print 'Log consumer exception: %s' % e
 
 	def print_report(self):
 		#TODO: rewrite this method
